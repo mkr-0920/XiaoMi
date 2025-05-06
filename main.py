@@ -3,14 +3,17 @@ import re
 import ast
 import time
 import hashlib
+import logging
 import base64
 import urllib
-import execjs
 import requests
+from pprint import pformat
 import config as XiaoMi_config
 from typing import Any, Dict, Optional
  
- 
+# 配置日志格式
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)-8s - %(message)s')
+
 # 取13位时间戳
 def timestamp():
     return int(round(time.time() * 1000))
@@ -44,6 +47,30 @@ def sha1_base64(nonce, ssecurity):
     clientSign = base64.b64encode(hex_bytes).decode('utf-8')
     
     return clientSign
+
+def extract_hours(time_str):
+    """从时间字符串中提取小时数"""
+    # 使用正则表达式匹配格式为 "音乐时长-1小时" 的字符串
+    match = re.search(r"(\d*\.?\d+)小时", time_str)
+    if match:
+        # 提取数字部分并转换为整数
+        return int(float(match.group(1)))
+    else:
+        raise ValueError("不支持的时间格式")
+
+def convert_to_hours(time_str):
+    """将时间字符串转换为小时"""
+    # 使用正则表达式提取数字部分
+    match = re.match(r"([\d.]+)(小时|天)", time_str)
+    if match:
+        value = float(match.group(1))  # 提取数字部分（可能是浮点数）
+        unit = match.group(2)           # 提取单位
+        if unit == "小时":
+            return int(value)           # 返回小时
+        elif unit == "天":
+            return int(value * 24)      # 1天 = 24小时
+    else:
+        raise ValueError("不支持的时间格式")
 
 def get(
     url: str,
@@ -165,7 +192,7 @@ def login(mobile, deviceId, pwd, headers):
     }
     headers["Content-Length"] = "241"
     response2 = requests.post(url2, headers=headers, cookies=cookies2, data=data)
-    print(response2.text)
+    print(response2.headers)
     Set_Cookie = response2.headers["Set-Cookie"]
     pattern = r"(userId|passToken)=([^;]+)"
     matches = re.findall(pattern, Set_Cookie)
@@ -182,11 +209,13 @@ def qqMusicVip(cookies_jrairstar, XiaoMi_config, session_id):
     finishMusicTask_body["jrairstar_ph"] = cookies_jrairstar["jrairstar_ph"]
     XiaoMi_config.GoldRich_body["jrairstar_ph"] = cookies_jrairstar["jrairstar_ph"]
     
+    video_sum = 0
+    music_sum = 0
     # 视频
     for i in range(2):
         video_completeTask_response = requests.get(XiaoMi_config.video_completeTask_url, headers=XiaoMi_config.completeTask_headers, cookies=cookies_jrairstar)
         if "完成任务失败" in video_completeTask_response.text:
-            print("video: ", video_completeTask_response.text)
+            logging.info(f"❌ video: {video_completeTask_response.text}")
             break
         video_response_value = json.loads(video_completeTask_response.text)
         # 检查响应是否成功
@@ -197,15 +226,21 @@ def qqMusicVip(cookies_jrairstar, XiaoMi_config, session_id):
             # 拼接新的 URL
             video_new_url = f"{XiaoMi_config.video_getaward_url}/{value}"  # 使用 / 拼接
             getaward_response = requests.get(video_new_url, headers=XiaoMi_config.completeTask_headers, cookies=cookies_jrairstar)
-            print(getaward_response.text)
+            getaward_response = json.loads(getaward_response.text)
+            if "value" in getaward_response:
+                video_hours = getaward_response["value"]["prizeInfo"]["prizeName"]
+                video_hours = convert_to_hours(video_hours)
+                video_sum = video_sum + video_hours
+
+
 
     # 音乐
     while True:
         finishMusicTask_response = requests.post(XiaoMi_config.finishMusicTask_url, headers=XiaoMi_config.finishMusicTask_headers, cookies=cookies_jrairstar, data=finishMusicTask_body)
         completeTask_response = requests.get(XiaoMi_config.completeTask_url, headers=XiaoMi_config.completeTask_headers, cookies=cookies_jrairstar)
 
-        print("finishMusicTask: ", finishMusicTask_response.text)
-        print("completeTask: ", completeTask_response.text)
+        logging.info(f"finishMusicTask: {finishMusicTask_response.text}")
+        logging.info(f"completeTask: {completeTask_response.text}")
         response_value = json.loads(completeTask_response.text)
         # 检查响应是否成功
         if "value" in response_value:
@@ -215,12 +250,29 @@ def qqMusicVip(cookies_jrairstar, XiaoMi_config, session_id):
             # 拼接新的 URL
             new_url = f"{XiaoMi_config.getaward_url}/{value}"  # 使用 / 拼接
             getaward_response = requests.get(new_url, headers=XiaoMi_config.completeTask_headers, cookies=cookies_jrairstar)
-            print(getaward_response.text)
+            getaward_response = json.loads(getaward_response.text)
+            if "value" in getaward_response:
+                music_hours = getaward_response["value"]["prizeInfo"]["prizeName"]
+                music_hours = extract_hours(music_hours)
+                music_sum = music_sum + music_hours
         else:
             break
+    video_richsum = 0
+    music_richsum = 0
+    video_richsum_response = requests.get(XiaoMi_config.video_richsum_url, headers=XiaoMi_config.completeTask_headers, cookies=cookies_jrairstar)
+    if "value" in video_richsum_response.text:
+        video_richsum_response = json.loads(video_richsum_response.text)
+        video_richsum = round(video_richsum_response["value"]/100, 2)
+
+    music_richsum_response = requests.get(XiaoMi_config.richsum_url, headers=XiaoMi_config.completeTask_headers, cookies=cookies_jrairstar)
+    if "value" in music_richsum_response.text:
+        music_richsum_response = json.loads(music_richsum_response.text)
+        music_richsum = round(music_richsum_response["value"]/1440, 2)
+
+    return video_sum, music_sum, video_richsum, music_richsum
  
 def read_cookie_file(startwith):
-    file_path = '/home/mkr/Downloads/xiaomi/cookie.txt'  # 目标文件路径
+    file_path = '/home/ubuntu/tgbot/xiaomi/cookie.txt'  # 目标文件路径
     try:
         # 读取文件内容
         with open(file_path, 'r') as f:
@@ -232,14 +284,14 @@ def read_cookie_file(startwith):
                     value = line.split('=', 1)[1].strip()
                     return value  # 返回提取的值
     except FileNotFoundError:
-        print(f"文件未找到: {file_path}")
+        logging.info(f"❌ 文件未找到: {file_path}")
     except Exception as e:
-        print(f"发生错误: {e}")
+        logging.info(f"❌ 发生错误: {e}")
     
     return None  # 如果没有找到，返回 None
 
 def write_cookie_file(startwith, cookie_value):
-    file_path = '/home/mkr/Downloads/xiaomi/cookie.txt'  # 目标文件路径
+    file_path = '/home/ubuntu/tgbot/xiaomi/cookie.txt'  # 目标文件路径
     try:
         with open(file_path, 'r') as f:
             content = f.readlines()
@@ -252,20 +304,20 @@ def write_cookie_file(startwith, cookie_value):
                 else:
                     f.write(line)  # 保留其他行
     except FileNotFoundError:
-        print(f"文件未找到: {file_path}")
+        logging.info(f"❌ 文件未找到: {file_path}")
     except Exception as e:
-        print(f"发生错误: {e}")
+        logging.info(f"❌ 发生错误: {e}")
 
 def xiaomi_main(session_id, XiaoMi_config):
     mobile =["", ""] # 手机号
     pwd = ["", ""] # 密码
-    deviceId = ["3jnRcKFwE-aCC1aA", "aB3eFgHi-4jKlMnOp", "ZyXwVuTs-1QrStUvW", "5mNqRsTt-8HjKfGdE", "pL0oIuYt-2WqErTyZ"] #格式:AAaAa1-aCC1aAAA1
+    deviceId = ["3jnRcKFwE-g3Pxun", "3jnRcKFwE-aCC1aA", "aB3eFgHi-4jKlMnOp", "ZyXwVuTs-1QrStUvW", "5mNqRsTt-8HjKfGdE", "pL0oIuYt-2WqErTyZ"] #格式:AAaAa1-aCC1aAAA1
     phone_models = ["Redmi K20", "Redmi K30 Pro", "OnePlus 9", "Samsung Galaxy S21", "Mi 14 Pro", "OnePlus 12 Pro"]
-
+    prize_all={}
     for i in range(len(mobile)):
         headers = {
         "Content-Type": "application/x-www-form-urlencoded",
-        "User-Agent": "{phone_models[i]}/cnm; MIUI/V14.0.5.0.SJKCNXM E/V140 B/S L/zh-CN LO/CN APP/xiaomi.account APPV/322103100 MK/UmVkbWkgSzMwIFBybw== SDKV/5.1.7.master CPN/com.mipay.wallet",
+        "User-Agent": f"{phone_models[i]}/cnm; MIUI/V14.0.5.0.SJKCNXM E/V140 B/S L/zh-CN LO/CN APP/xiaomi.account APPV/322103100 MK/UmVkbWkgSzMwIFBybw== SDKV/5.1.7.master CPN/com.mipay.wallet",
         "Host": "account.xiaomi.com",
         "Connection": "Keep-Alive",
         "Accept-Encoding": "gzip"
@@ -277,8 +329,10 @@ def xiaomi_main(session_id, XiaoMi_config):
         if not text_cookies(cookies_login["userId"], cookies_login["passToken"]):
             cookies_login = login(mobile[i], deviceId[i], pwd[i], headers)
             write_cookie_file(mobile[i], cookies_login)
-            print("更新cookies_login")
+            logging.info("🍪 更新cookies_login")
 
         cookies_jrairstar = get_cookies_by_passtk(cookies_login["userId"], cookies_login["passToken"], deviceId[i])
-        qqMusicVip(cookies_jrairstar, XiaoMi_config, session_id)
-    return 0
+        video_sum, music_sum, video_richsum, music_richsum = qqMusicVip(cookies_jrairstar, XiaoMi_config, session_id)
+        prize_all[mobile[i][-4:]] = f"视频{video_sum}小时，累计{video_richsum}天；音乐{music_sum}小时，累计{music_richsum}天；"
+    formatted_prize_all = pformat(prize_all, indent=4)
+    return formatted_prize_all
