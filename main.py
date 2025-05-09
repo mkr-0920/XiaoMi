@@ -7,6 +7,8 @@ import logging
 import base64
 import urllib
 import requests
+import telebot
+from telebot import apihelper
 from pprint import pformat
 import config as XiaoMi_config
 from typing import Any, Dict, Optional
@@ -359,4 +361,12 @@ def xiaomi_main(XiaoMi_config):
         prize_all[mobile[i][-4:]] = f"视频{video_sum}小时，累计{video_richsum}天；音乐{music_sum}小时，累计{music_richsum}天；"
     formatted_prize_all = pformat(prize_all, indent=2)
     logging.info(f"{formatted_prize_all}")
-    # return formatted_prize_all
+    return formatted_prize_all
+
+formatted_prize_all = xiaomi_main(XiaoMi_config)
+
+apihelper.proxy = {'http': 'http://127.0.0.1:7890', 'https': 'http://127.0.0.1:7890'}
+TOKEN = "xxx:xxxxxx"
+chat_id = ""
+BOT = telebot.TeleBot(TOKEN)
+BOT.send_message(chat_id=chat_id, text=formatted_prize_all)
