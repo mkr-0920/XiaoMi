@@ -231,13 +231,12 @@ def qqMusicVip(cookies_jrairstar, XiaoMi_config):
 	'session_id': '4d2f474e-e324-4d7c-a8cc-8c3cb8f72fc51746761526672',
     }
     finishMusicTask_body["jrairstar_ph"] = cookies_jrairstar["jrairstar_ph"]
-    XiaoMi_config.GoldRich_body["jrairstar_ph"] = cookies_jrairstar["jrairstar_ph"]
     
     video_sum = 0
     music_sum = 0
     # 视频
     for i in range(2):
-        video_completeTask_response = requests.get(XiaoMi_config.video_completeTask_url, headers=XiaoMi_config.completeTask_headers, cookies=cookies_jrairstar)
+        video_completeTask_response = requests.get(XiaoMi_config.video_completeTask_url, headers=XiaoMi_config.Mi_headers, cookies=cookies_jrairstar)
         if "失败" in video_completeTask_response.text:
             logging.info(f"❌ video: {video_completeTask_response.text}")
             break
@@ -249,7 +248,7 @@ def qqMusicVip(cookies_jrairstar, XiaoMi_config):
 
             # 拼接新的 URL
             video_new_url = f"{XiaoMi_config.video_getaward_url}/{value}"  # 使用 / 拼接
-            getaward_response = requests.get(video_new_url, headers=XiaoMi_config.completeTask_headers, cookies=cookies_jrairstar)
+            getaward_response = requests.get(video_new_url, headers=XiaoMi_config.Mi_headers, cookies=cookies_jrairstar)
             getaward_response = json.loads(getaward_response.text)
             if "value" in getaward_response:
                 video_hours = getaward_response["value"]["prizeInfo"]["prizeName"]
@@ -260,8 +259,8 @@ def qqMusicVip(cookies_jrairstar, XiaoMi_config):
 
     # 音乐
     while True:
-        finishMusicTask_response = requests.post(XiaoMi_config.finishMusicTask_url, headers=XiaoMi_config.finishMusicTask_headers, cookies=cookies_jrairstar, data=finishMusicTask_body)
-        completeTask_response = requests.get(XiaoMi_config.completeTask_url, headers=XiaoMi_config.completeTask_headers, cookies=cookies_jrairstar)
+        finishMusicTask_response = requests.post(XiaoMi_config.finishMusicTask_url, headers=XiaoMi_config.Mi_headers, cookies=cookies_jrairstar, data=finishMusicTask_body)
+        completeTask_response = requests.get(XiaoMi_config.completeTask_url, headers=XiaoMi_config.Mi_headers, cookies=cookies_jrairstar)
 
         logging.info(f"finishMusicTask: {finishMusicTask_response.text}")
         logging.info(f"completeTask: {completeTask_response.text}")
@@ -273,7 +272,7 @@ def qqMusicVip(cookies_jrairstar, XiaoMi_config):
 
             # 拼接新的 URL
             new_url = f"{XiaoMi_config.getaward_url}/{value}"  # 使用 / 拼接
-            getaward_response = requests.get(new_url, headers=XiaoMi_config.completeTask_headers, cookies=cookies_jrairstar)
+            getaward_response = requests.get(new_url, headers=XiaoMi_config.Mi_headers, cookies=cookies_jrairstar)
             getaward_response = json.loads(getaward_response.text)
             if "value" in getaward_response:
                 music_hours = getaward_response["value"]["prizeInfo"]["prizeName"]
@@ -283,12 +282,12 @@ def qqMusicVip(cookies_jrairstar, XiaoMi_config):
             break
     video_richsum = 0
     music_richsum = 0
-    video_richsum_response = requests.get(XiaoMi_config.video_richsum_url, headers=XiaoMi_config.completeTask_headers, cookies=cookies_jrairstar)
+    video_richsum_response = requests.get(XiaoMi_config.video_richsum_url, headers=XiaoMi_config.Mi_headers, cookies=cookies_jrairstar)
     if "value" in video_richsum_response.text:
         video_richsum_response = json.loads(video_richsum_response.text)
         video_richsum = round(video_richsum_response["value"]/100, 2)
 
-    music_richsum_response = requests.get(XiaoMi_config.richsum_url, headers=XiaoMi_config.completeTask_headers, cookies=cookies_jrairstar)
+    music_richsum_response = requests.get(XiaoMi_config.richsum_url, headers=XiaoMi_config.Mi_headers, cookies=cookies_jrairstar)
     if "value" in music_richsum_response.text:
         music_richsum_response = json.loads(music_richsum_response.text)
         music_richsum = round(music_richsum_response["value"]/1440, 2)
@@ -338,6 +337,10 @@ def xiaomi_main(XiaoMi_config):
     pwd = ["", ""] # 密码
     deviceId = ["3jnRcKFwE-g3Pxun", "3jnRcKFwE-aCC1aA", "aB3eFgHi-4jKlMnOp", "ZyXwVuTs-1QrStUvW", "5mNqRsTt-8HjKfGdE", "pL0oIuYt-2WqErTyZ"] #格式:AAaAa1-aCC1aAAA1
     phone_models = ["Redmi K20", "Redmi K30 Pro", "OnePlus 9", "Samsung Galaxy S21", "Mi 14 Pro", "OnePlus 12 Pro"]
+    # LSXD_PRIZE1263腾讯视频VIP月卡; LSXD_PRIZE1262优酷VIP会员月卡; LSXD_PRIZE1267爱奇艺黄金会员月卡; LSXD_PRIZE1264芒果TV会员月卡; LSXD_PRIZE1265哔哩哔哩会员月卡
+    prizeCode = ["LSXD_PRIZE1263", "", "", "", ""]
+    music_rewards_number = ""
+    video_rewards_number = ["", "", "", "", ""]
     prize_all={}
     for i in range(len(mobile)):
         headers = {
@@ -359,6 +362,20 @@ def xiaomi_main(XiaoMi_config):
         cookies_jrairstar = get_cookies_by_passtk(cookies_login["userId"], cookies_login["passToken"], deviceId[i])
         video_sum, music_sum, video_richsum, music_richsum = qqMusicVip(cookies_jrairstar, XiaoMi_config)
         prize_all[mobile[i][-4:]] = f"视频{video_sum}小时，累计{video_richsum}天；音乐{music_sum}小时，累计{music_richsum}天；"
+        if music_richsum >=31 :
+            GoldRich_url = f"https://m.jr.airstarfinance.net/mp/api/generalActivity/convertGoldRich?prizeCode=tencent-31&activityCode=qq-music-201303&phone={music_rewards_number}&app=com.mipay.wallet&oaid=bb34f31df66617de&regId=8tgXmSOql9rPb%2B92P1c5OuPKvsQWhAl80JpZOh0WsMCYbIRUBqRJEynY7vXreLeq&versionCode=20577595&versionName=6.89.1.5275.2323&isNfcPhone=true&channel=mipay_unloadoff_mymusic&deviceType=2&system=1&visitEnvironment=2&userExtra=%7B%22platformType%22:1,%22com.miui.player%22:%224.30.0.5%22,%22com.miui.video%22:%22v2025021290(MiVideo-UN)%22,%22com.mipay.wallet%22:%226.89.1.5275.2323%22%7D"
+            GoldRich_response = requests.get(GoldRich_url, headers=XiaoMi_config.Mi_headers, cookies=cookies_jrairstar)
+            logging.info(f"GoldRich_response: {GoldRich_response.text}")
+            GoldRich_response = json.loads(GoldRich_response.text)
+            if "value" in GoldRich_response:
+                prize_all[f"{mobile[i][-4:]}音乐兑换"] = GoldRich_response["value"]["prizeInfo"]["prizeGiveDesc2"]
+        if video_richsum >=31 and prizeCode[i] and video_rewards_number[i] :
+            video_GoldRich_url = f"https://m.jr.airstarfinance.net/mp/api/generalActivity/convertGoldRich?prizeCode={prizeCode[i]}&activityCode=2211-videoWelfare&phone={video_rewards_number[i]}&app=com.mipay.wallet&oaid=bb34f31df66617de&regId=4ykekFkpke%2BNeyabPBxszXkR0LU%2F4uipGCJVd1StRX5cDdDh1ZWMm%2BgkECL%2Fi%2BtV&versionCode=20577595&versionName=6.89.1.5275.2323&isNfcPhone=true&channel=exchange&deviceType=2&system=1&visitEnvironment=2&userExtra=%7B%22platformType%22:1,%22com.miui.player%22:%224.30.0.5%22,%22com.miui.video%22:%22v2025021290(MiVideo-UN)%22,%22com.mipay.wallet%22:%226.89.1.5275.2323%22%7D"
+            video_GoldRich_response = requests.get(video_GoldRich_url, headers=XiaoMi_config.Mi_headers, cookies=cookies_jrairstar)
+            logging.info(f"video_GoldRich_response: {video_GoldRich_response.text}")
+            video_GoldRich_response = json.loads(video_GoldRich_response.text)
+            if "value" in video_GoldRich_response:
+                prize_all[f"{mobile[i][-4:]}视频兑换"] = video_GoldRich_response["value"]["prizeInfo"]["prizeGiveDesc2"]
     formatted_prize_all = pformat(prize_all, indent=2)
     logging.info(f"{formatted_prize_all}")
     return formatted_prize_all
