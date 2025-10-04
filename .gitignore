@@ -1,0 +1,14 @@
+# python
+*.pyc
+*.pyo
+*.pyd
+*.pyz
+*/__pycache__/*
+__pycache__/
+*.egg-info
+*.egg
+
+config.py
+cookies.txt
+demo.py
+demo1.py
