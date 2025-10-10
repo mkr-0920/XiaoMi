@@ -730,54 +730,119 @@ class XiaomiClient:
         
         return result
 
+
+# --- 辅助功能 ---
+
+def send_telegram_notification(message: str):
+    """封装一个发送 Telegram 通知的函数"""
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        logging.warning("⚠️ 未配置 Telegram Token 或 Chat ID，跳过发送通知。")
+        return
+    try:
+        bot = TeleBot(TELEGRAM_TOKEN)
+        apihelper.proxy = TELEGRAM_PROXY
+        bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
+        logging.info("✅ Telegram 通知已发送。")
+    except Exception as e:
+        logging.error(f"❌ 发送 Telegram 通知失败: {e}")
+
 # --- 主执行逻辑 ---
-def xiaomi_main_optimized(users: List[Dict[str, str]]):
-    """主执行函数，迭代所有用户"""
+
+def pre_check_and_login_phase(users: List[Dict[str, str]]):
+    """
+    阶段一：检查所有用户的Cookie，并为失效的用户启动二维码登录流程。
+    """
+    logging.info("🚀 === 阶段一：开始检查所有用户的 Cookie 有效性 ===")
+    users_to_login = []
+    
+    # 1. 遍历所有用户，筛选出需要登录的账号
+    for user in users:
+        mobile = user['mobile']
+        with requests.Session() as session:
+            client = XiaomiClient(user, session)
+            cookie_data = read_cookie_file(mobile)
+            user_id = cookie_data.get("userId", "")
+            pass_token = cookie_data.get("passToken", "")
+            
+            if not client.check_pass_token(user_id, pass_token):
+                logging.warning(f"🔔 用户 {mobile[-4:]} 的 Cookie 已失效，需要重新登录。")
+                users_to_login.append(user)
+            else:
+                logging.info(f"✅ 用户 {mobile[-4:]} 的 Cookie 有效。")
+    
+    if not users_to_login:
+        logging.info("🎉 所有用户的 Cookie 均有效，无需登录。")
+        return
+
+    # 2. 逐一处理需要登录的账号
+    logging.info(f"⏳ 检测到 {len(users_to_login)} 个账号需要登录，将逐一进行处理。")
+    for user in users_to_login:
+        mobile = user['mobile']
+        user_suffix = mobile[-4:]
+        
+        # 发送 Telegram 通知，提示用户准备扫码
+        send_telegram_notification(f"🔔 小米账号 {user_suffix} 需要登录！\n脚本将生成二维码，请准备使用米家App扫描。")
+        
+        with requests.Session() as session:
+            client = XiaomiClient(user, session)
+            new_cookies = client.qr_login()  # 此处会阻塞，直到扫码或超时
+
+            if new_cookies:
+                write_cookie_file(mobile, new_cookies)
+                send_telegram_notification(f"✅ 小米账号 {user_suffix} 已成功登录！")
+            else:
+                logging.error(f"❌ 用户 {user_suffix} 登录失败或超时。")
+                send_telegram_notification(f"❌ 小米账号 {user_suffix} 登录失败或超时！")
+        
+        # 在处理下一个账号前暂停，给用户一些缓冲时间
+        if len(users_to_login) > 1:
+            logging.info("⏸️ 暂停5秒，准备处理下一个账号...")
+            time.sleep(5)
+
+
+def main_task_phase(users: List[Dict[str, str]]):
+    """
+    阶段二：为所有拥有有效Cookie的用户执行任务。
+    """
+    logging.info("🚀 === 阶段二：开始为所有有效用户执行任务 ===")
     
     # 尝试执行 QQ Music Session 更新
-    # 注意: 这里使用第一个用户的配置来构造临时 client
-    if not users:
+    if users:
+        with requests.Session() as temp_session:
+            temp_client = XiaomiClient(users[0], temp_session)
+            temp_client.update_qq_music_session()
+    else:
         logging.error("用户列表为空，无法执行任务。")
         return {}
 
-    temp_client = XiaomiClient(users[0], requests.Session())
-    temp_client.update_qq_music_session()
-    
     prize_all: Dict[str, str] = {}
     
     for user in users:
         mobile = user['mobile']
         user_suffix = mobile[-4:]
         
-        # 使用独立的 Session 处理每个用户，避免 Cookies 混淆
         with requests.Session() as session:
             client = XiaomiClient(user, session)
             
-            # 1. 检查和更新 passToken
+            # 再次检查Cookie的有效性，确保只为有效用户执行任务
             cookie_data = read_cookie_file(mobile)
             user_id = cookie_data.get("userId", "")
             pass_token = cookie_data.get("passToken", "")
 
-            # 检查 passToken 是否有效
             if not client.check_pass_token(user_id, pass_token):
-                # 无效则重新登录, 优先使用二维码登录
-                logging.info("🔑 passToken 无效或已过期，将启动二维码登录流程。")
-                new_cookies = client.qr_login() # <--- 新的调用
-                if new_cookies:
-                    write_cookie_file(mobile, new_cookies)
-                    user_id = new_cookies["userId"]
-                    pass_token = new_cookies["passToken"]
-                else:
-                    prize_all[user_suffix] = "❌ 登录失败，跳过任务。"
-                    continue
+                logging.warning(f"⚠️ 用户 {user_suffix} Cookie 无效，跳过执行任务。")
+                prize_all[user_suffix] = "❌ Cookie 无效，跳过任务。"
+                continue
             
-            # 2. 获取 jrairstar 任务 Cookies
+            logging.info(f"✅ 用户 {user_suffix} Cookie 有效，开始执行任务...")
+            
+            # 获取 jrairstar 任务 Cookies
             cookies_jrairstar = client.get_jrairstar_cookies(user_id, pass_token)
             if not cookies_jrairstar:
                 prize_all[user_suffix] = "❌ 获取 jrairstar 任务 Cookies 失败，跳过任务。"
                 continue
-                
-            # 3. 执行任务和兑换
+            
+            # 执行任务和兑换
             results = client.run_vip_tasks(cookies_jrairstar)
 
             prize_all[user_suffix] = (
@@ -789,21 +854,23 @@ def xiaomi_main_optimized(users: List[Dict[str, str]]):
             
     return prize_all
 
+
 # --- 程序入口 ---
 if __name__ == '__main__':
-    # 从配置文件导入 USERS
-    formatted_prize_all_dict = xiaomi_main_optimized(USERS)
-    formatted_prize_all_str = json.dumps(formatted_prize_all_dict, indent=2, ensure_ascii=False)
-    
-    logging.info(f"--- 最终任务报告 ---\n{formatted_prize_all_str}")
+    # 阶段一：检查和登录
+    pre_check_and_login_phase(USERS)
 
-    # Telegram 通知
-    apihelper.proxy = TELEGRAM_PROXY
-    BOT = TeleBot(TELEGRAM_TOKEN)
+    # 阶段二：执行主任务
+    logging.info("✅ 所有登录流程已处理完毕，即将开始执行签到任务...")
+    time.sleep(3) # 短暂暂停，以便用户看到日志
     
-    report_message = f"小米 VIP 任务报告:\n{formatted_prize_all_str}"
+    final_results_dict = main_task_phase(USERS)
     
-    try:
-        BOT.send_message(chat_id=TELEGRAM_CHAT_ID, text=report_message)
-    except Exception as e:
-        logging.error(f"❌ Telegram 消息发送失败: {e}")
+    # 阶段三：发送最终报告
+    if not final_results_dict:
+        logging.info("ℹ️  没有用户成功执行任务，不发送最终报告。")
+    else:
+        final_report_str = json.dumps(final_results_dict, indent=2, ensure_ascii=False)
+        logging.info(f"--- 最终任务报告 ---\n{final_report_str}")
+        report_message = f"小米 VIP 任务报告:\n{final_report_str}"
+        send_telegram_notification(report_message)
