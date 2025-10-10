@@ -1,5 +1,6 @@
 import json
 import re
+import os
 import time
 import hashlib
 import logging
@@ -184,18 +185,153 @@ class XiaomiClient:
         self.video_rewards_number = user_config['video_rewards_number']
         self.session = session
         self.user_suffix = self.mobile[-4:]
+
+        mihome_agent = "okhttp/3.12.1 APP/com.xiaomi.mihome APPV/6.0.101"
+        self.account_headers = {
+            "User-Agent": mihome_agent,
+            "Accept-Encoding": "identity", # 使用 identity 避免压缩问题
+            "Connection": "Keep-Alive",
+        }
+        self.session.headers.update(self.account_headers)
         
         # 构造 User-Agent 和 headers for account.xiaomi.com (登录)
-        self.account_headers = {
-            "Content-Type": "application/x-www-form-urlencoded",
-            # 使用用户手机型号动态构造 User-Agent
-            "User-Agent": f"{self.phone_model}/cnm; MIUI/V14.0.5.0.SJKCNXM E/V140 B/S L/zh-CN LO/CN APP/xiaomi.account APPV/322103100 MK/UmVkbWkgSzMwIFBybw== SDKV/5.1.7.master CPN/com.mipay.wallet",
-            "Host": "account.xiaomi.com",
-            "Connection": "Keep-Alive",
-            "Accept-Encoding": "gzip"
-        }
-        # 初始化 session headers 为 account_headers
-        self.session.headers.update(self.account_headers)
+        # self.account_headers = {
+        #     "Content-Type": "application/x-www-form-urlencoded",
+        #     "User-Agent": f"{self.phone_model}/cnm; MIUI/V14.0.5.0.SJKCNXM E/V140 B/S L/zh-CN LO/CN APP/xiaomi.account APPV/322103100 MK/UmVkbWkgSzMwIFBybw== SDKV/5.1.7.master CPN/com.mipay.wallet",
+        #     "Host": "account.xiaomi.com",
+        #     "Connection": "Keep-Alive",
+        #     "Accept-Encoding": "gzip"
+        # }
+        # self.session.headers.update(self.account_headers)
+
+    def _pre_login(self, sid: str) -> Optional[Dict[str, Any]]:
+        """
+        执行预登录操作，获取 _sign, qs 等后续步骤所需参数。
+        这是一个被密码登录和二维码登录共用的辅助方法。
+        """
+        logging.info("➡️ 执行步骤 1 (预登录)...")
+        try:
+            url = f"https://account.xiaomi.com/pass/serviceLogin?_json=true&sid={sid}"
+            self.session.headers.update({"Host": "account.xiaomi.com"})
+            self.session.cookies.update({"deviceId": self.device_id, "sdkVersion": "3.4.1"})
+            
+            response = self.session.get(url)
+            response.raise_for_status()
+
+            if not response.text.startswith('&&&START&&&'):
+                 raise ValueError("预登录响应格式不正确")
+
+            data = json.loads(response.text.replace('&&&START&&&', ''))
+            
+            if not data or '_sign' not in data:
+                logging.error(f"❌ 预登录失败. 未能获取 _sign. 响应: {response.text}")
+                return None
+            
+            logging.info("✅ 登录步骤 1 (预登录) 成功, 已获取 _sign。")
+            return data
+        except Exception as e:
+            logging.error(f"❌ 预登录过程中发生错误: {e}")
+            return None
+
+    @staticmethod
+    def _print_qr(login_url: str):
+        """在控制台打印二维码并保存为 qr.png 文件"""
+        try:
+            from qrcode import QRCode
+            logging.info('📱 请在60秒内使用米家APP扫描下方二维码完成登录')
+            qr = QRCode(border=1, box_size=10)
+            qr.add_data(login_url)
+            qr.make(fit=True)
+            img = qr.make_image(fill_color="black", back_color="white")
+            img.save('qr.png')
+            # 尝试在控制台打印
+            qr.print_tty()
+            logging.info('ℹ️  如果二维码显示不全, 请直接打开脚本目录下的 qr.png 文件进行扫描。')
+        except ImportError:
+            logging.error("❌ 未找到 qrcode 库, 无法生成二维码。请运行: pip install \"qrcode[pil]\"")
+        except Exception as e:
+            logging.warning(f"⚠️ 打印二维码到控制台失败: {e}. 请直接扫描 qr.png 文件。")
+
+
+    def qr_login(self) -> Optional[Dict[str, str]]:
+        """
+        使用二维码扫码登录，此版本基于 token_extractor.py 的有效逻辑实现。
+        """
+        logging.info(f"🚀 开始为用户 {self.user_suffix} 进行二维码登录...")
+        
+        try:
+            # 步骤 1: 直接请求二维码和长轮询地址 (基于 token_extractor.py)
+            # 这个接口不需要复杂的 _sign，只需要提供正确的 sid 和 callback
+            logging.info("➡️ 正在向新接口 /longPolling/loginUrl 请求二维码...")
+            
+            # 为 miui_vip 服务构造正确的 qs 和 callback
+            sid = "miui_vip"
+            callback_url = "https://api.vip.miui.com/sts"
+            qs_miui_vip = f"?sid={sid}&_json=true"
+            # 需要对 qs 参数进行 URL 编码
+            qs_encoded = urllib.parse.quote(qs_miui_vip)
+
+            params = {
+                "_qrsize": "480",
+                "qs": qs_encoded,
+                "callback": callback_url,
+                "_hasLogo": "false",
+                "sid": sid,
+                "_locale": "zh_CN", # 使用中文
+                "_dc": str(int(time.time() * 1000))
+            }
+
+            url = "https://account.xiaomi.com/longPolling/loginUrl"
+            response_qr = self.session.get(url, params=params)
+            response_qr.raise_for_status()
+            
+            # 这个接口的响应带有 &&&START&&& 前缀
+            qr_data = json.loads(response_qr.text.replace('&&&START&&&', ''))
+
+            login_url = qr_data.get("loginUrl")
+            lp_url = qr_data.get("lp")
+
+            if not login_url or not lp_url:
+                raise ValueError(f"未能从响应中获取二维码信息。响应: {qr_data}")
+
+            self._print_qr(login_url)
+            logging.info("✅ 二维码获取成功。")
+
+            # 步骤 2: 长轮询等待扫码确认
+            logging.info("⏳ 等待手机App扫码确认...")
+            # token_extractor.py 中 lp 地址不带 https, 需要手动添加
+            if not lp_url.startswith('https:'):
+                lp_url = 'https:' + lp_url
+            
+            response_lp = self.session.get(lp_url, timeout=120) # 延长超时时间到2分钟
+            response_lp.raise_for_status()
+
+            lp_data = json.loads(response_lp.text.replace('&&&START&&&', ''))
+
+            # 步骤 3: 提取最终凭证
+            if lp_data.get("code") != 0:
+                 raise ValueError(f"扫码登录失败: {lp_data.get('desc', '未知错误')}")
+
+            user_id = lp_data.get("userId")
+            pass_token = lp_data.get("passToken")
+
+            if not user_id or not pass_token:
+                logging.error(f"❌ 二维码登录成功，但未能提取有效凭证。响应: {lp_data}")
+                return None
+
+            logging.info(f"✅ 用户 {self.user_suffix} 二维码登录成功.")
+            return {"userId": str(user_id), "passToken": pass_token}
+
+        except requests.exceptions.Timeout:
+            logging.error("❌ 登录超时，请重新运行脚本。")
+            return None
+        except Exception as e:
+            logging.error(f"❌ 二维码登录过程中发生错误: {e}")
+            return None
+        finally:
+            # 确保脚本退出时清理二维码图片
+            if os.path.exists('qr.png'):
+                os.remove('qr.png')
 
 
     def check_pass_token(self, user_id: str, pass_token: str) -> bool:
@@ -228,57 +364,92 @@ class XiaomiClient:
             logging.error(f"❌ 检查 passToken 时发生网络错误: {e}")
             return False
 
+
     def login(self) -> Optional[Dict[str, str]]:
-        """执行小米账户登录流程，获取新的 passToken 和 userId"""
+        """
+        执行小米账户登录流程，获取新的 passToken 和 userId。
+        此版本集成了从GitHub找到的、更新的预登录逻辑来解决70016错误。
+        """
         logging.info(f"🚀 开始登录用户 {self.user_suffix}...")
         
-        # 步骤 1: 获取 qs 和 _sign
-        url1 = "https://account.xiaomi.com/pass/serviceLogin"
-        params1 = {"_json": "true", "sid": "miui_vip", "_locale": "zh_CN"}
-        self.session.cookies.update({"userId": self.mobile, "deviceId": self.device_id})
-        
+        # 步骤 1: 预登录，获取 _sign 和 qs (采用新脚本的有效逻辑)
+        # 我们将sid替换为我们需要的 "miui_vip"
         try:
+            url1 = "https://account.xiaomi.com/pass/serviceLogin?_json=true&sid=miui_vip"
+            
             # 确保使用 account host headers
             self.session.headers.update({"Host": "account.xiaomi.com"})
-            response1 = self.session.get(url1, params=params1)
-            response1_data = safe_json_load(response1)
-            
-            if not response1_data or response1_data.get('code') != 0:
-                 logging.error(f"❌ 登录步骤 1 失败. 响应: {response1.text}")
-                 return None
+            # 新脚本的 Cookie 格式可能更有效
+            self.session.cookies.update({"deviceId": self.device_id, "sdkVersion": "3.4.1"})
 
-            # 步骤 2: 提交登录凭证
+            response1 = self.session.get(url1)
+            response1.raise_for_status() # 如果请求失败 (非200状态码), 抛出异常
+
+            # 小米API的响应前缀是"&&&START&&&"，需要移除
+            if not response1.text.startswith('&&&START&&&'):
+                 raise ValueError("预登录响应格式不正确，缺少&&&START&&&前缀")
+
+            pre_login_data = json.loads(response1.text.replace('&&&START&&&', ''))
+            
+            if not pre_login_data or '_sign' not in pre_login_data:
+                logging.error(f"❌ 登录步骤 1 (预登录) 失败. 未能获取 _sign. 响应: {response1.text}")
+                return None
+            
+            _sign = pre_login_data['_sign']
+            qs = pre_login_data['qs']
+            callback = pre_login_data['callback']
+            
+            logging.info("✅ 登录步骤 1 (预登录) 成功, 已获取 _sign。")
+
+        except Exception as e:
+            logging.error(f"❌ 登录步骤 1 (预登录) 过程中发生错误: {e}")
+            return None
+
+        # 步骤 2: 提交登录凭证 (沿用你之前的逻辑, 但使用上一步获取到的新凭证)
+        try:
             url2 = "https://account.xiaomi.com/pass/serviceLoginAuth2"
             data2 = {
-                "qs": response1_data['qs'],
-                "callback": "https://api.vip.miui.com/sts",
-                "_json": "true",
-                "_sign": response1_data['_sign'],
                 "user": self.mobile,
                 "hash": md5_upper(self.pwd),
+                "_sign": _sign,
+                "qs": qs,
+                "callback": callback,
                 "sid": "miui_vip",
-                "_locale": "zh_CN"
+                "_json": "true",
             }
-            # 再次确保使用 account host headers
+            
+            # 确保使用正确的 Host 和 Content-Type
             self.session.headers.update({"Host": "account.xiaomi.com", "Content-Type": "application/x-www-form-urlencoded"})
             response2 = self.session.post(url2, data=data2)
-
-            # 解析 Set-Cookie 获取新的 userId 和 passToken
-            set_cookie = response2.headers.get("Set-Cookie", "")
-            pattern = r"(userId|passToken)=([^;]+)"
-            matches = re.findall(pattern, set_cookie)
+            response2.raise_for_status()
             
-            cookie_dict = {key: value for key, value in matches}
+            if not response2.text.startswith('&&&START&&&'):
+                 raise ValueError("认证响应格式不正确，缺少&&&START&&&前缀")
 
-            if not cookie_dict.get("userId") or not cookie_dict.get("passToken"):
-                logging.error(f"❌ 登录失败，未能从 Set-Cookie 中提取有效凭证. 响应: {response2.text}")
+            auth_data = json.loads(response2.text.replace('&&&START&&&', ''))
+
+            if auth_data.get('code') != 0:
+                desc = auth_data.get('desc', '未知错误')
+                # 检查是否需要验证码
+                if 'notificationUrl' in auth_data or 'captchaUrl' in auth_data:
+                    logging.error(f"❌ 登录失败: 需要安全验证 (验证码), 无法自动处理。描述: {desc}")
+                else:
+                    logging.error(f"❌ 登录失败. Code: {auth_data.get('code')}, 描述: {desc}")
+                return None
+
+            # 从响应中获取 userId，并从会话的Cookie中获取 passToken
+            user_id = auth_data.get("userId")
+            pass_token = self.session.cookies.get("passToken")
+
+            if not user_id or not pass_token:
+                logging.error(f"❌ 登录成功，但未能从响应中提取有效凭证. 响应: {response2.text}")
                 return None
             
             logging.info(f"✅ 用户 {self.user_suffix} 登录成功.")
-            return cookie_dict
+            return {"userId": str(user_id), "passToken": pass_token}
 
         except Exception as e:
-            logging.error(f"❌ 登录过程中发生错误: {e}")
+            logging.error(f"❌ 登录步骤 2 (认证) 过程中发生错误: {e}")
             return None
 
 
@@ -589,8 +760,9 @@ def xiaomi_main_optimized(users: List[Dict[str, str]]):
 
             # 检查 passToken 是否有效
             if not client.check_pass_token(user_id, pass_token):
-                # 无效则重新登录
-                new_cookies = client.login()
+                # 无效则重新登录, 优先使用二维码登录
+                logging.info("🔑 passToken 无效或已过期，将启动二维码登录流程。")
+                new_cookies = client.qr_login() # <--- 新的调用
                 if new_cookies:
                     write_cookie_file(mobile, new_cookies)
                     user_id = new_cookies["userId"]
